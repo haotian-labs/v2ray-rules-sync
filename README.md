@@ -25,6 +25,60 @@
 
 ## 本地执行
 
+提供两种方式，按需选择一种即可：
+
+| 脚本 | 用途 | 依赖 |
+|------|------|------|
+| [`download-rules.sh`](download-rules.sh) | 直接下载本仓库已生成的三个 txt，适合服务器定时更新 | Bash、`curl` 或 `wget`、标准 Unix 工具（`mktemp`、`cmp`、`chmod`、`mv` 等） |
+| [`sync-rules.sh`](sync-rules.sh) | 从上游下载 dat 并在本地解包 | 同上，另需 `v2dat` |
+
+两个脚本均会在临时下载错误时重试。下载、解包和非空校验全部完成后，才开始更新规则；内容未变化的文件会跳过，保留原文件的时间戳和权限。更新的文件以 `0644` 权限逐个原子替换，避免读取到写入中的文件；三个文件整体并非原子更新，读取方若要求同一版本，应在脚本成功退出后再统一加载。
+
+两个脚本共用输出目录下的 `.rules-update.lock` 目录锁，同一目录已有更新任务时，后启动的任务会报错退出。临时目录和锁在正常退出及收到 `HUP`、`INT`、`TERM` 信号时自动清理；若进程被强制终止（如 `kill -9`）或系统断电，确认没有更新任务运行后，可手动删除遗留的 `.rules-update.lock` 和 `.rules-work.*` 目录再重试。
+
+### 直接下载已生成的规则
+
+在 `main` 分支获取脚本后执行，无需安装 `v2dat`：
+
+```bash
+chmod +x download-rules.sh
+# 默认从本仓库 release 分支下载，写入 /opt/mosdns/rules/
+sudo ./download-rules.sh
+```
+
+可通过环境变量指定输出目录和下载来源：
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `RULES_DIR` | `/opt/mosdns/rules` | 规则输出目录，自动创建；执行用户需有写入权限 |
+| `BASE_URL` | `https://raw.githubusercontent.com/jianghaotian/v2ray-rules-sync/release` | 三个 txt 所在的根 URL，允许末尾带 `/`；可替换为标签路径或镜像地址 |
+
+```bash
+# 下载到当前用户目录
+RULES_DIR="$HOME/mosdns/rules" ./download-rules.sh
+
+# 使用指定同步标签下的规则（将标签替换为实际存在的标签）
+RULES_DIR="$HOME/mosdns/rules" \
+BASE_URL="https://raw.githubusercontent.com/jianghaotian/v2ray-rules-sync/sync-2026-04-17" \
+./download-rules.sh
+```
+
+脚本先将三个文件下载到输出目录内的随机临时目录，下载失败或结果为空时退出，不覆盖现有规则。
+
+服务器定时任务示例（每天 4:15，按服务器本地时间执行）。先将脚本放到 `/opt/mosdns/download-rules.sh` 并赋予执行权限，创建日志目录：
+
+```bash
+sudo mkdir -p /opt/mosdns/logs
+```
+
+在有权写入规则目录及日志目录的用户 crontab 中添加：
+
+```cron
+15 4 * * * /opt/mosdns/download-rules.sh >> /opt/mosdns/logs/download-rules.log 2>&1
+```
+
+### 从上游下载并解包
+
 依赖：`curl` 或 `wget`、[v2dat](https://github.com/urlesistiana/v2dat)（`go install github.com/urlesistiana/v2dat@latest`）
 
 ```bash
@@ -39,11 +93,21 @@ sudo ./sync-rules.sh
 RULES_DIR="$HOME/mosdns/rules" ./sync-rules.sh
 ```
 
-服务器定时任务示例（每天 4:15，与脚本注释一致）：
+如需定时在本地解包，可使用以下任务（每天 4:15，按服务器本地时间执行；需提前创建日志目录，并确保 cron 的 `PATH` 中包含 `v2dat`）：
 
 ```cron
 15 4 * * * /path/to/sync-rules.sh >> /path/to/sync-rules.log 2>&1
 ```
+
+## 验证
+
+使用 Python 3.8+ 运行离线回归测试（模拟 `curl`、`wget` 和 `v2dat`，不访问网络）：
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+覆盖正常更新、内容未变化、下载或解包失败、空文件、单文件原子替换、并发锁及终止信号清理。
 
 ## 上游与许可
 
